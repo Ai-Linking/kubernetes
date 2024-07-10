@@ -18,6 +18,8 @@ package cpumanager
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
@@ -44,24 +46,24 @@ const PolicyStatic policyName = "static"
 //
 // The static policy maintains the following sets of logical CPUs:
 //
-// - SHARED: Burstable, BestEffort, and non-integral Guaranteed containers
-//   run here. Initially this contains all CPU IDs on the system. As
-//   exclusive allocations are created and destroyed, this CPU set shrinks
-//   and grows, accordingly. This is stored in the state as the default
-//   CPU set.
+//   - SHARED: Burstable, BestEffort, and non-integral Guaranteed containers
+//     run here. Initially this contains all CPU IDs on the system. As
+//     exclusive allocations are created and destroyed, this CPU set shrinks
+//     and grows, accordingly. This is stored in the state as the default
+//     CPU set.
 //
-// - RESERVED: A subset of the shared pool which is not exclusively
-//   allocatable. The membership of this pool is static for the lifetime of
-//   the Kubelet. The size of the reserved pool is
-//   ceil(systemreserved.cpu + kubereserved.cpu).
-//   Reserved CPUs are taken topologically starting with lowest-indexed
-//   physical core, as reported by cAdvisor.
+//   - RESERVED: A subset of the shared pool which is not exclusively
+//     allocatable. The membership of this pool is static for the lifetime of
+//     the Kubelet. The size of the reserved pool is
+//     ceil(systemreserved.cpu + kubereserved.cpu).
+//     Reserved CPUs are taken topologically starting with lowest-indexed
+//     physical core, as reported by cAdvisor.
 //
-// - ASSIGNABLE: Equal to SHARED - RESERVED. Exclusive CPUs are allocated
-//   from this pool.
+//   - ASSIGNABLE: Equal to SHARED - RESERVED. Exclusive CPUs are allocated
+//     from this pool.
 //
-// - EXCLUSIVE ALLOCATIONS: CPU sets assigned exclusively to one container.
-//   These are stored as explicit assignments in the state.
+//   - EXCLUSIVE ALLOCATIONS: CPU sets assigned exclusively to one container.
+//     These are stored as explicit assignments in the state.
 //
 // When an exclusive allocation is made, the static policy also updates the
 // default cpuset in the state abstraction. The CPU manager's periodic
@@ -229,6 +231,30 @@ func (p *staticPolicy) Allocate(s state.State, pod *v1.Pod, container *v1.Contai
 		// Call Topology Manager to get the aligned socket affinity across all hint providers.
 		hint := p.affinity.GetAffinity(string(pod.UID), container.Name)
 		klog.InfoS("Topology Affinity", "pod", klog.KObj(pod), "containerName", container.Name, "affinity", hint)
+
+		annotationKey := "container.cpu.numa.node.affinity/" + container.Name
+		annotationValue := pod.Annotations[annotationKey]
+		if annotationValue != "" {
+			bitMask, _ := bitmask.NewBitMask()
+			for _, v := range strings.Split(annotationValue, ",") {
+				atoi, err := strconv.Atoi(v)
+				if err != nil {
+					bitMask, _ = bitmask.NewBitMask()
+					break
+				}
+				err = bitMask.Add(atoi)
+				if err != nil {
+					bitMask, _ = bitmask.NewBitMask()
+					break
+				}
+			}
+
+			if bitMask.Count() > 0 {
+				hint.NUMANodeAffinity = bitMask
+				hint.Preferred = true
+				klog.InfoS("Topology Affinity", "pod", klog.KObj(pod), "containerName", container.Name, "affinity changed", hint)
+			}
+		}
 
 		// Allocate CPUs according to the NUMA affinity contained in the hint.
 		cpuset, err := p.allocateCPUs(s, numCPUs, hint.NUMANodeAffinity, p.cpusToReuse[string(pod.UID)])

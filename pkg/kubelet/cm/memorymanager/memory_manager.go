@@ -18,6 +18,8 @@ package memorymanager
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
 	cadvisorapi "github.com/google/cadvisor/info/v1"
@@ -201,6 +203,26 @@ func (m *manager) GetMemoryNUMANodes(pod *v1.Pod, container *v1.Container) sets.
 	}
 
 	klog.InfoS("Memory affinity", "pod", klog.KObj(pod), "containerName", container.Name, "numaNodes", numaNodes)
+
+	annotationKey := "container.memory.numa.node.affinity/" + container.Name
+	annotationValue := pod.Annotations[annotationKey]
+	if annotationValue != "" {
+		numaNodesNew := sets.NewInt()
+		for _, v := range strings.Split(annotationValue, ",") {
+			atoi, err := strconv.Atoi(v)
+			if err != nil {
+				numaNodesNew = sets.NewInt()
+				break
+			}
+			numaNodesNew.Insert(atoi)
+		}
+
+		if numaNodesNew.Len() > 0 {
+			numaNodes = numaNodesNew
+			klog.InfoS("Memory affinity", "pod", klog.KObj(pod), "containerName", container.Name, "numaNodes changed", numaNodes)
+		}
+	}
+
 	return numaNodes
 }
 
